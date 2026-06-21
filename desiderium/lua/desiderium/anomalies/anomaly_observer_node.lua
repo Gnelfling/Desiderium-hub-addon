@@ -346,8 +346,9 @@ DESIDERIUM.RegisterAnomaly("observer_node", {
                         -- instability leak: small gravity reduction nearby
                         local nearby = ents.FindInSphere(e:GetPos(), 220)
                         for _, ne in ipairs(nearby) do
-                            if IsValid(ne) and ne:GetPhysicsObject() then
-                                local p = ne:GetPhysicsObject()
+                            if not IsValid(ne) then continue end
+                            local p = ne:GetPhysicsObject()
+                            if IsValid(p) then
                                 p:Wake()
                                 p:ApplyForceCenter(Vector(0,0, -50)) -- subtle
                             end
