@@ -1,11 +1,11 @@
 --[[
 	DESIDERIUM - Core Module (server-side startup cascade)
-	This file handles the gate convar and prints a startup cascade on gate open.
+	This version sends chat messages from the server (PrintMessage) and
+	emits a small client-side audio ping so clients hear a cue for each line.
 
-	Fix: The startup cascade should run every time the gate is opened so
-	admins always see the boot-style green text. Previously it only ran
-	when the anomaly registry was empty which prevented the lines from
-	appearing in normal runs where anomalies are already registered.
+	Note: Chat messages sent via PrintMessage/HUD_PRINTTALK are server-originated
+	and will appear in client chat without requiring client autorun code.
+	We still send a short net ping so clients can play an audio cue.
 ]]--
 
 DESIDERIUM = DESIDERIUM or {}
@@ -21,6 +21,11 @@ CreateConVar(
 	1
 )
 
+-- Network string for playing a brief audio ping on clients
+if SERVER then
+	util.AddNetworkString("desiderium_startup_ping")
+end
+
 function DESIDERIUM.RegisterAnomaly( name, data )
 	if DESIDERIUM.Anomalies[ name ] then
 		print( "[DESIDERIUM] WARNING: anomaly '" .. name .. "' is already registered, overwriting." )
@@ -31,6 +36,8 @@ function DESIDERIUM.RegisterAnomaly( name, data )
 end
 
 -- Server-side boot cascade: print colored lines directly to server console
+-- also print each line into client chat (server-originated) and send a small
+-- net ping to clients so they play an audio cue.
 local function BroadcastStartupLines()
 	local lines = {
 		"[DESIDERIUM] Initializing anomaly subsystem...",
@@ -88,8 +95,18 @@ local function BroadcastStartupLines()
 		local line = lines[i]
 		timer.Simple(i * 0.06, function()
 			if not line then return end
+			-- server console colored output
 			MsgC( Color(100,220,100), "[DESIDERIUM] ", Color(180,255,180), line .. "\n" )
 			print( line )
+
+			-- send as server-originated chat to clients
+			PrintMessage(HUD_PRINTTALK, "[DESIDERIUM] " .. line)
+
+			-- also send a tiny net ping so clients can play an audio cue
+			if SERVER then
+				net.Start("desiderium_startup_ping")
+				net.Broadcast()
+			end
 		end )
 	end
 end
