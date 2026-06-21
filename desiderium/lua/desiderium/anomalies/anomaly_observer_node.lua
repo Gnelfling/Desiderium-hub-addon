@@ -186,7 +186,7 @@ DESIDERIUM.RegisterAnomaly("observer_node", {
             lastTick = CurTime(),
             frozenUntil = 0,
             target = nil,
-            moveSpeed = 80,
+            moveSpeed = 30,
         }
 
         local damageHookName = "desiderium_observer_damage_" .. tostring(ent:EntIndex())
