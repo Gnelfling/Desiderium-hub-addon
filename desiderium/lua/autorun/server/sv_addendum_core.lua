@@ -1,35 +1,16 @@
 --[[
-	DESIDERIUM - Core Module
-	------------------------
-	This is the "engine" file. It does three things:
+	DESIDERIUM - Core Module (updated: server-side startup lines)
+	This version prints the startup cascade directly to the server console
+	using colored MsgC output instead of sending lines to clients.
 
-	1. Creates the sv_addendum_enable ConVar (the gate toggle).
-	2. Sets up DESIDERIUM.Anomalies, an empty registry table that future
-	   anomaly files will register themselves into. This file does NOT
-	   know what anomalies exist - it just reads whatever is in the table
-	   when it needs to.
-	3. Watches sv_addendum_enable for changes. Enabling it does NOT fire
-	   an anomaly directly anymore - it just opens the gate, which lets
-	   Exposure start rising (see sv_addendum_exposure.lua, which owns
-	   the actual rise/decay/dispatch-timing logic). This file just
-	   handles the moment of opening/closing itself: a sound cue, a
-	   containment-lockout check, and cleanup on close.
-
-	Nothing in this file should need to change when new anomalies are
-	added later. New anomalies are separate files that hook into
-	DESIDERIUM.Anomalies on their own.
-]]
+	This prevents clientside chat collisions and ensures the boot log is
+	visible in server logs for troubleshooting.
+]]--
 
 DESIDERIUM = DESIDERIUM or {}
 DESIDERIUM.Anomalies = DESIDERIUM.Anomalies or {}
 DESIDERIUM.Version = "0.0.1-core"
 
--- ============================================================
--- The hidden trigger convar.
--- No flags, no admin gate - any client or the server console can
--- flip this for now. FCVAR_NOTIFY makes the change broadcast to
--- everyone's console, same as real cheat-style convars do.
--- ============================================================
 CreateConVar(
 	"sv_addendum_enable",
 	"0",
@@ -39,13 +20,6 @@ CreateConVar(
 	1
 )
 
--- ============================================================
--- Registration function for future anomaly files.
--- Each anomaly file will call:
---   DESIDERIUM.RegisterAnomaly( "name", { ... } )
--- This file just needs to exist and work - it doesn't need to
--- know about specific anomalies yet.
--- ============================================================
 function DESIDERIUM.RegisterAnomaly( name, data )
 	if DESIDERIUM.Anomalies[ name ] then
 		print( "[DESIDERIUM] WARNING: anomaly '" .. name .. "' is already registered, overwriting." )
@@ -55,51 +29,76 @@ function DESIDERIUM.RegisterAnomaly( name, data )
 	print( "[DESIDERIUM] Registered anomaly module: " .. name )
 end
 
--- ============================================================
--- The fake server-log cascade. This is the test payload.
--- Styled like a dedicated server boot log, not a map compile log.
--- This whole block gets replaced later by real anomaly dispatch logic.
--- ============================================================
-local function PrintAddendumCascade()
+-- Server-side boot cascade: print colored lines directly to server console
+local function BroadcastStartupLines()
 	local lines = {
-		"------------------------------------------------",
-		"[addendum] subsystem awake",
-		"[addendum] reading local manifest... ok",
-		"[addendum] entity index: 0 known, 0 unindexed",
-		"[addendum] resolving navmesh references... done",
-		"[addendum] resolving navmesh references... done",
-		"[addendum] resolving navmesh references... failed (1)",
-		"[addendum] retrying failed reference... done",
-		"[addendum] sound cache primed",
-		"[addendum] light registry primed",
-		"[addendum] presence flag cleared",
-		"[addendum] presence flag cleared",
-		"[addendum] presence flag set",
-		"------------------------------------------------",
+		"[DESIDERIUM] Initializing anomaly subsystem...",
+		"[DESIDERIUM] Loading containment matrix...",
+		"",
+		"[ENGINE] sv_addendum_enable detected: TRUE",
+		"[ENGINE] Authority level: OVERRIDE GRANTED",
+		"",
+		"[DESIDERIUM] Verifying anomaly registry...",
+		"[DESIDERIUM] Registered entities: 03 active templates loaded",
+		"[DESIDERIUM] Integrity check: PASS (some inconsistencies detected)",
+		"",
+		"[ENGINE] Starting physics hook extensions...",
+		"[ENGINE] Lua environment secured",
+		"",
+		"[DESIDERIUM] Opening firewall gate...",
+		"[DESIDERIUM] WARNING: containment boundary becoming unstable",
+		"",
+		"[DESIDERIUM] Syncing anomaly scheduler...",
+		"[DESIDERIUM] Establishing spawn channels...",
+		"",
+		"[ENGINE] Networked entity tables updated",
+		"[ENGINE] Pre-caching scripted_sequence handlers",
+		"",
+		"[DESIDERIUM] WARNING: observer interference detected (low level)",
+		"[DESIDERIUM] WARNING: residual event traces found in memory buffer",
+		"",
+		"[DESIDERIUM] Firewall status: PARTIALLY OPEN",
+		"",
+		"[ENGINE] Activating anomaly runtime layer...",
+		"",
+		"[DESIDERIUM] Loading anomaly modules:",
+		"    - anomaly_observer_node.lua .......... OK",
+		"    - anomaly_replay_stutter.lua ......... OK",
+		"    - anomaly_sequence_breaker.lua ....... OK",
+		"    - anomaly_lockbreak_parasite.lua ..... OK",
+		"",
+		"[DESIDERIUM] Module stability: NOMINAL (degrading)",
+		"",
+		"[ENGINE] Hooking Think cycle...",
+		"[ENGINE] Hooking Spawn events...",
+		"[ENGINE] Hooking Damage override layer...",
+		"",
+		"[DESIDERIUM] WARNING: external observation not recommended",
+		"",
+		"[DESIDERIUM] Firewall state transition:",
+		"        CLOSED -> OPENING -> ACTIVE",
+		"",
+		"[DESIDERIUM] SYSTEM ONLINE",
+		"",
+		"[ENGINE] Server anomaly layer is now ACTIVE",
 	}
 
 	for i = 1, #lines do
-		local line = lines[ i ]
-		timer.Simple( i * 0.15, function()
+		local line = lines[i]
+		-- print each line quickly but on server console; no client chat involved
+		timer.Simple(i * 0.06, function()
+			if not line then return end
+			-- green-ish color for DESIDERIUM label and lighter green for body
+			MsgC( Color(100,220,100), "[DESIDERIUM] ", Color(180,255,180), line .. "\n" )
+			-- also echo to standard print for logs
 			print( line )
 		end )
 	end
 end
 
--- ============================================================
--- Watch the convar. Enabling no longer dispatches anything directly -
--- that's now owned by the exposure tick loop (sv_addendum_exposure.lua),
--- which rises while this is on and decides when/whether to actually
--- fire an anomaly. This callback just handles the "gate just opened/
--- closed" moment itself: the boot-cascade proof-of-life print (only
--- when the registry is still empty), the lockout check, and cleanup
--- on close.
--- ============================================================
 cvars.AddChangeCallback( "sv_addendum_enable", function( name, old, new )
 	if new == "1" and old ~= "1" then
 
-		-- Respect containment lockout: refuse to actually open if we're
-		-- still inside the post-containment cooldown window.
 		if DESIDERIUM.ContainmentLockoutUntil and CurTime() < DESIDERIUM.ContainmentLockoutUntil then
 			local remaining = math.ceil( DESIDERIUM.ContainmentLockoutUntil - CurTime() )
 			print( "[addendum] gate refused to open - containment lockout active (" .. remaining .. "s remaining)" )
@@ -115,7 +114,7 @@ cvars.AddChangeCallback( "sv_addendum_enable", function( name, old, new )
 
 		local registryEmpty = not DESIDERIUM.Anomalies or table.IsEmpty( DESIDERIUM.Anomalies )
 		if registryEmpty then
-			PrintAddendumCascade()
+			BroadcastStartupLines()
 		end
 	elseif new == "0" and old ~= "0" then
 		print( "[addendum] subsystem dormant" )
