@@ -1,0 +1,6 @@
+{
+	"title" : "Desiderium",
+	"type" : "ServerContent",
+	"tags" : [ "fun", "horror" ],
+	"ignore" : [ "*.psd", "*.vcproj", "*.svn*", "*.git*" ]
+}
