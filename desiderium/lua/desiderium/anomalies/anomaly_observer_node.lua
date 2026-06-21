@@ -1,16 +1,15 @@
 --[[
-DESIDERIUM Anomaly: Observer Node (v3.1 - spin, containment by light/damage, sounds/effects)
+DESIDERIUM Anomaly: Observer Node (v3.2 - AI-like movement, faster spin, removal sound/effect)
 File: desiderium/lua/desiderium/anomalies/anomaly_observer_node.lua
 
-Changes in v3.1:
-- Restores smooth spinning and gentle bobbing (no physics movement) using time-based interpolation.
-- Uses a stable per-entity state for angular integration (smooth rotation).
-- Touch sound changed to ambient/alarms/warningbell1.wav.
-- On removal (any cleanup path) plays ambient/energy/spark1.wav and emits a Sparks effect.
-- Contains a light-based containment heuristic: if a player's flashlight hits the node, it enters DIRECT (frozen) state.
-- Taking damage forces DIRECT state and plays npc/attack_helicopter/aheli_crash_alert2.wav.
-- Adds an EntityTakeDamage hook per entity to detect damage and a cleanup removal of that hook.
-- Keeps previous safety guards (physics validity, duplicate caps, xpcall protection).
+Changes in v3.2:
+- Removed flashlight-based containment (was unreliable).
+- Damage still forces DIRECT/freeze and plays alert sound (changed to whiteflash.wav).
+- The node now moves with a simple AI-like steering using MOVETYPE_FLY and SetVelocity when UNOBSERVED.
+  * Picks nearby targets (players/props) and drifts toward them non-linearly.
+  * When DIRECT (observed) it stops immediately and zeroes velocity.
+- Spin rate increased for a faster visual spin; timer tick rate increased for smoother updates.
+- Keeps safety guards, duplicate caps, removal sound/effect, and protected timer.
 ]]--
 
 if CLIENT then return end
@@ -20,14 +19,14 @@ local LoopSound = "ambient/levels/citadel/citadel_drone_loop1.wav"
 local AppearSound = "ambient/alarms/klaxon1.wav"
 local TouchSound = "ambient/alarms/warningbell1.wav"
 local RemovalSound = "ambient/energy/spark1.wav"
-local AlertSound = "npc/attack_helicopter/aheli_crash_alert2.wav"
+local AlertSound = "ambient/energy/whiteflash.wav" -- changed per request
 
 local CONSOLE_GATE_CVAR = "sv_addendum_enable"
 
 -- Tunables and safety limits
-local TOUCH_FORCE = 180           -- conservative force
+local TOUCH_FORCE = 180
 local TOUCH_ANGVEL = 8
-local VELOCITY_SKIP_THRESHOLD = 700
+local VELOCITY_SKIP_THRESHOLD = 900
 local MAX_DUPLICATES_PER_ANOMALY = 2
 local MAX_GLOBAL_GHOSTS = 18
 local DUP_CHANCE_BASE = 0.02
@@ -42,20 +41,6 @@ local function EmitEvent(name, data)
     if DESIDERIUM.OnAnomalyEvent and type(DESIDERIUM.OnAnomalyEvent) == "function" then
         pcall(DESIDERIUM.OnAnomalyEvent, name, data)
     end
-end
-
-local function IsFlashlightObserving(ent)
-    -- Heuristic: if a player's flashlight is on and a trace from their eye hits the entity, treat as observed
-    for _, ply in ipairs(player.GetAll()) do
-        if not IsValid(ply) or not ply:Alive() then continue end
-        if ply.FlashlightIsOn and ply:FlashlightIsOn() then
-            local tr = util.TraceLine({start = ply:EyePos(), endpos = ent:WorldSpaceCenter(), filter = ply, mask = MASK_SHOT})
-            if tr.Entity == ent then
-                return true, ply
-            end
-        end
-    end
-    return false, nil
 end
 
 local function IsPlayerDirectlyObserving(ent)
@@ -112,6 +97,27 @@ local function PickAnchorPoint()
     return Vector(0,0,64)
 end
 
+local function RandomNearbyTarget(ent, radius)
+    radius = radius or 1200
+    local pos = ent:GetPos()
+    local candidates = {}
+    for _, ply in ipairs(player.GetAll()) do
+        if not IsValid(ply) or not ply:Alive() then continue end
+        if ply:GetPos():DistToSqr(pos) <= radius * radius then
+            table.insert(candidates, ply)
+        end
+    end
+    for _, e in ipairs(ents.FindInSphere(pos, radius)) do
+        if not IsValid(e) or e == ent then continue end
+        local cls = e:GetClass() or ""
+        if cls:find("prop_physics") or e:IsNPC() or e:IsPlayer() then
+            table.insert(candidates, e)
+        end
+    end
+    if #candidates == 0 then return nil end
+    return candidates[math.random(#candidates)]
+end
+
 local function MakeAfterimage(orig)
     if not IsValid(orig) then return end
     local ghost = ents.Create("prop_physics")
@@ -147,7 +153,8 @@ DESIDERIUM.RegisterAnomaly("observer_node", {
         ent:SetModel(Model)
         ent:SetPos(origin)
         ent:Spawn()
-        ent:SetMoveType(MOVETYPE_NONE)
+        -- Use MOVETYPE_FLY for smooth AI-like movement via SetVelocity
+        ent:SetMoveType(MOVETYPE_FLY)
         ent:SetSolid(SOLID_VPHYSICS)
         ent:SetCollisionGroup(COLLISION_GROUP_IN_VEHICLE)
         ent:DrawShadow(false)
@@ -178,9 +185,10 @@ DESIDERIUM.RegisterAnomaly("observer_node", {
             angAccum = 0,
             lastTick = CurTime(),
             frozenUntil = 0,
+            target = nil,
+            moveSpeed = 80,
         }
 
-        -- damage hook to force observed/freeze
         local damageHookName = "desiderium_observer_damage_" .. tostring(ent:EntIndex())
         hook.Add("EntityTakeDamage", damageHookName, function(target, dmg)
             if target == ent then
@@ -189,12 +197,14 @@ DESIDERIUM.RegisterAnomaly("observer_node", {
                 sound.Play(AlertSound, ent:GetPos(), 90, 100, 1)
                 table.insert(DESIDERIUM._ObserverLogs, {time = CurTime(), type = "damaged", dmg = dmg:GetDamage()})
                 EmitEvent("OnDamaged", {anomaly = "observer_node", damage = dmg:GetDamage()})
+                -- zero velocity immediately
+                if IsValid(ent) then ent:SetVelocity(Vector(0,0,0)) end
             end
         end)
 
         local timerName = "desiderium_observer_node_" .. tostring(ent:EntIndex())
 
-        timer.Create(timerName, 0.08, 0, function()
+        timer.Create(timerName, 0.04, 0, function()
             local ok, err = xpcall(function()
                 if not IsValid(ent) then timer.Remove(timerName) return end
 
@@ -202,7 +212,6 @@ DESIDERIUM.RegisterAnomaly("observer_node", {
                 if not GetConVar(CONSOLE_GATE_CVAR):GetBool() then
                     if IsValid(ent) then
                         ent:StopSound(LoopSound)
-                        -- play removal cue & effect
                         sound.Play(RemovalSound, ent:GetPos(), 90, 100, 1)
                         local ed = EffectData(); ed:SetOrigin(ent:GetPos()); util.Effect("Sparks", ed)
                         SafeRemoveEntity(ent)
@@ -227,30 +236,30 @@ DESIDERIUM.RegisterAnomaly("observer_node", {
                     return
                 end
 
-                -- Smooth spin and gentle bob (server-side transform)
+                -- Smooth spin (faster)
                 local now = CurTime()
                 local dt = math.Clamp(now - (state.lastTick or now), 0, 0.2)
                 state.lastTick = now
-
-                -- spin: integrate angle smoothly
-                local spinRate = 80 -- degrees per second
+                local spinRate = 240 -- degrees/sec
                 state.angAccum = (state.angAccum + spinRate * dt) % 360
                 local ang = Angle(0, state.angAccum, 0)
 
-                -- bob: small sine-based vertical offset
-                local bob = math.sin(now * 1.2) * 3 -- +/-3 units
+                -- gentle bob
+                local bob = math.sin(now * 1.6) * 3
                 local basePos = state.anchor
                 if IsValid(ent) then
-                    ent:SetPos(basePos + Vector(0,0,bob))
                     ent:SetAngles(ang)
+                    -- position handled by movement via velocity; keep anchor for bob reference when not moving
+                    if state.mode ~= "UNOBSERVED" then
+                        -- when observed, stay anchored exactly (no movement)
+                        ent:SetPos(basePos + Vector(0,0,bob))
+                        ent:SetVelocity(Vector(0,0,0))
+                    end
                 end
 
-                -- Visibility checks include flashlight
-                local directFlash, flashP = IsFlashlightObserving(ent)
+                -- Visibility checks
                 local direct, dp = IsPlayerDirectlyObserving(ent)
                 local indirect, ip, via = IsPlayerIndirectlyObserving(ent)
-                if directFlash then direct, dp = true, flashP end
-
                 local newMode = "UNOBSERVED"
                 local observerPlayer = nil
                 if direct or (state.frozenUntil > CurTime()) then
@@ -270,6 +279,8 @@ DESIDERIUM.RegisterAnomaly("observer_node", {
                         ent:SetColor(Color(255,255,255,220))
                         ent:StopSound(LoopSound)
                         sound.Play("ambient/atmosphere/ambience_sky.wav", ent:GetPos(), 70, 90, 0.2)
+                        -- stop motion
+                        if IsValid(ent) then ent:SetVelocity(Vector(0,0,0)) end
                     elseif newMode == "INDIRECT" then
                         state.mode = "INDIRECT"
                         table.insert(DESIDERIUM._ObserverLogs, {time = CurTime(), type = "observed_indirect", via = tostring(via)})
@@ -278,6 +289,7 @@ DESIDERIUM.RegisterAnomaly("observer_node", {
                         ent:SetColor(Color(255,255,255,180))
                         ent:StopSound(LoopSound)
                         sound.Play("ambient/alarms/klaxon1.wav", ent:GetPos(), 70, 120, 0.25)
+                        if IsValid(ent) then ent:SetVelocity(Vector(0,0,0)) end
                     else
                         state.mode = "UNOBSERVED"
                         table.insert(DESIDERIUM._ObserverLogs, {time = CurTime(), type = "unobserved"})
@@ -290,7 +302,6 @@ DESIDERIUM.RegisterAnomaly("observer_node", {
                 end
 
                 if state.mode == "DIRECT" then
-                    -- remains visually active but frozen
                     return
                 end
 
@@ -302,7 +313,33 @@ DESIDERIUM.RegisterAnomaly("observer_node", {
                     return
                 end
 
-                -- UNOBSERVED: corruption effects (non-moving)
+                -- UNOBSERVED: AI-like movement + corruption effects
+                -- Choose or validate target
+                if not IsValid(state.target) or math.random() < 0.08 then
+                    state.target = RandomNearbyTarget(ent, 1200)
+                end
+
+                local speedBase = state.moveSpeed or 80
+                local speed = speedBase + (DESIDERIUM.Exposure and (DESIDERIUM.Exposure / 10) or 0)
+
+                if IsValid(state.target) then
+                    local tgtPos = state.target:GetPos() + Vector(0,0,30)
+                    local dir = (tgtPos - ent:GetPos())
+                    if dir:Length() > 5 then
+                        dir:Normalize()
+                        if IsValid(ent) then
+                            -- set velocity for smooth movement
+                            ent:SetVelocity(dir * speed)
+                        end
+                    end
+                else
+                    -- gentle wandering
+                    if IsValid(ent) then
+                        ent:SetVelocity(VectorRand() * (speed * 0.25))
+                    end
+                end
+
+                -- corruption: nudge nearby props
                 local playersNearby = 0
                 for _, ply in ipairs(player.GetAll()) do
                     if not IsValid(ply) or not ply:Alive() then continue end
@@ -388,7 +425,6 @@ DESIDERIUM.RegisterAnomaly("observer_node", {
             end
         end)
 
-        -- cleanup closure
         return true, function()
             if timer.Exists(timerName) then timer.Remove(timerName) end
             if IsValid(ent) then
