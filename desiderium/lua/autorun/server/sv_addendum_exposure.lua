@@ -1,10 +1,10 @@
 --[[
-	DESIDERIUM - Exposure & Containment
-	------------------------------------
-	This is the "wound" model. sv_addendum_enable being 1 doesn't fire
-	anomalies directly anymore - it just means Exposure is currently
-	RISING. Exposure is a single number from 0 upward that represents
-	how compromised the breach is:
+DESIDERIUM - Exposure & Containment
+----------------------------------
+This is the "wound" model. sv_addendum_enable being 1 doesn't fire
+anomalies directly anymore - it just means Exposure is currently
+RISING. Exposure is a single number from 0 upward that represents
+how compromised the breach is:
 
 		- While enabled (sv_addendum_enable 1): Exposure climbs over time.
 		- While disabled (sv_addendum_enable 0): Exposure decays slowly,
@@ -17,10 +17,10 @@
 		  is forced back to 0, Exposure is slashed hard, and a lockout
 		  timer prevents immediately re-opening it.
 
-	This file owns Exposure and the containment gate. The dispatcher
-	(sv_addendum_dispatch.lua) still owns picking *which* anomaly fires -
-	this file just decides *whether and how often* to ask it to.
-]]
+This file owns Exposure and the containment gate. The dispatcher
+(sv_addendum_dispatch.lua) still owns picking *which* anomaly fires -
+this file just decides *whether and how often* to ask it to.
+]]--
 
 DESIDERIUM = DESIDERIUM or {}
 
@@ -31,14 +31,14 @@ DESIDERIUM.ContainmentLockoutUntil = 0
 -- Tunables. All in one place so the curve can be adjusted without
 -- hunting through logic.
 -- ============================================================
-local RISE_RATE          = 1.0   -- Exposure gained per second while enabled
+local RISE_RATE          = 1.5   -- Exposure gained per second while enabled (increased to raise spawn probability)
 local DECAY_RATE         = 0.4   -- Exposure lost per second while disabled
 local CONTAINMENT_THRESHOLD = 100  -- Exposure value that triggers forced shutdown
 local CONTAINMENT_LOCKOUT   = 30   -- seconds the gate refuses to reopen after containment
-local MIN_CHECK_INTERVAL = 8    -- seconds between dispatch checks at LOW exposure
+local MIN_CHECK_INTERVAL = 4    -- seconds between dispatch checks at LOW exposure (lowered to check more often)
 local MAX_CHECK_INTERVAL = 1.5  -- seconds between dispatch checks at HIGH exposure
-local MAX_FIRE_CHANCE    = 0.65 -- chance to actually dispatch on a check, at max exposure
-local MIN_FIRE_CHANCE    = 0.05 -- chance to actually dispatch on a check, at low exposure
+local MAX_FIRE_CHANCE    = 0.90 -- chance to actually dispatch on a check, at max exposure (increased)
+local MIN_FIRE_CHANCE    = 0.15 -- chance to actually dispatch on a check, at low exposure (increased)
 
 -- ============================================================
 -- Maps current Exposure (0 -> CONTAINMENT_THRESHOLD) into a 0-1
