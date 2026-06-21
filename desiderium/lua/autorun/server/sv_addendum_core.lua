@@ -1,10 +1,11 @@
 --[[
-	DESIDERIUM - Core Module (updated: server-side startup lines)
-	This version prints the startup cascade directly to the server console
-	using colored MsgC output instead of sending lines to clients.
+	DESIDERIUM - Core Module (server-side startup cascade)
+	This file handles the gate convar and prints a startup cascade on gate open.
 
-	This prevents clientside chat collisions and ensures the boot log is
-	visible in server logs for troubleshooting.
+	Fix: The startup cascade should run every time the gate is opened so
+	admins always see the boot-style green text. Previously it only ran
+	when the anomaly registry was empty which prevented the lines from
+	appearing in normal runs where anomalies are already registered.
 ]]--
 
 DESIDERIUM = DESIDERIUM or {}
@@ -85,12 +86,9 @@ local function BroadcastStartupLines()
 
 	for i = 1, #lines do
 		local line = lines[i]
-		-- print each line quickly but on server console; no client chat involved
 		timer.Simple(i * 0.06, function()
 			if not line then return end
-			-- green-ish color for DESIDERIUM label and lighter green for body
 			MsgC( Color(100,220,100), "[DESIDERIUM] ", Color(180,255,180), line .. "\n" )
-			-- also echo to standard print for logs
 			print( line )
 		end )
 	end
@@ -99,6 +97,7 @@ end
 cvars.AddChangeCallback( "sv_addendum_enable", function( name, old, new )
 	if new == "1" and old ~= "1" then
 
+		-- Respect containment lockout
 		if DESIDERIUM.ContainmentLockoutUntil and CurTime() < DESIDERIUM.ContainmentLockoutUntil then
 			local remaining = math.ceil( DESIDERIUM.ContainmentLockoutUntil - CurTime() )
 			print( "[addendum] gate refused to open - containment lockout active (" .. remaining .. "s remaining)" )
@@ -112,10 +111,9 @@ cvars.AddChangeCallback( "sv_addendum_enable", function( name, old, new )
 			DESIDERIUM.BroadcastGateOpened()
 		end
 
-		local registryEmpty = not DESIDERIUM.Anomalies or table.IsEmpty( DESIDERIUM.Anomalies )
-		if registryEmpty then
-			BroadcastStartupLines()
-		end
+		-- Always show the startup cascade when the gate opens
+		BroadcastStartupLines()
+
 	elseif new == "0" and old ~= "0" then
 		print( "[addendum] subsystem dormant" )
 
