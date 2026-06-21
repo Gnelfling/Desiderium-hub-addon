@@ -27,11 +27,11 @@ local CONSOLE_GATE_CVAR = "sv_addendum_enable"
 local TOUCH_FORCE = 180
 local TOUCH_ANGVEL = 8
 local VELOCITY_SKIP_THRESHOLD = 900
-local MAX_DUPLICATES_PER_ANOMALY = 2
+local MAX_DUPLICATES_PER_ANOMALY = 8
 local MAX_GLOBAL_GHOSTS = 18
-local DUP_CHANCE_BASE = 0.02
+local DUP_CHANCE_BASE = 0.05
 local DUP_CHANCE_BOOST_NO_PLAYERS = 0.06
-local GRAVITY_PULSE_FORCE = 40
+local GRAVITY_PULSE_FORCE = 80
 
 DESIDERIUM = DESIDERIUM or {}
 DESIDERIUM._GlobalGhostCount = DESIDERIUM._GlobalGhostCount or 0
@@ -186,7 +186,7 @@ DESIDERIUM.RegisterAnomaly("observer_node", {
             lastTick = CurTime(),
             frozenUntil = 0,
             target = nil,
-            moveSpeed = 30,
+            moveSpeed = 20,
         }
 
         local damageHookName = "desiderium_observer_damage_" .. tostring(ent:EntIndex())
