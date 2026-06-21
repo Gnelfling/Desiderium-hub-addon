@@ -17,7 +17,7 @@ DESIDERIUM.ContainmentLockoutUntil = DESIDERIUM.ContainmentLockoutUntil or 0
 -- ============================================================
 local RISE_RATE          = 1.2   -- Exposure gained per second while enabled (slightly reduced)
 local DECAY_RATE         = 0.4   -- Exposure lost per second while disabled
-local CONTAINMENT_THRESHOLD = 100  -- Exposure value that triggers forced shutdown
+local CONTAINMENT_THRESHOLD = 300  -- Exposure value that triggers forced shutdown
 local CONTAINMENT_LOCKOUT   = 10   -- seconds the gate refuses to reopen after containment
 local MIN_CHECK_INTERVAL = 5    -- seconds between dispatch checks at LOW exposure (increased to reduce simultaneous spawns)
 local MAX_CHECK_INTERVAL = 1.5  -- seconds between dispatch checks at HIGH exposure
