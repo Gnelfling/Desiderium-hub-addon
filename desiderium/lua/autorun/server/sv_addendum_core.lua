@@ -1,11 +1,8 @@
 --[[
 	DESIDERIUM - Core Module (server-side startup cascade)
-	This version sends chat messages from the server (PrintMessage) and
-	emits a small client-side audio ping so clients hear a cue for each line.
-
-	Note: Chat messages sent via PrintMessage/HUD_PRINTTALK are server-originated
-	and will appear in client chat without requiring client autorun code.
-	We still send a short net ping so clients can play an audio cue.
+	This version broadcasts each startup line to clients as a net message so
+	clients can display a colored chat message and play an audio cue. The
+	server still prints colored lines to the server console.
 ]]--
 
 DESIDERIUM = DESIDERIUM or {}
@@ -21,9 +18,9 @@ CreateConVar(
 	1
 )
 
--- Network string for playing a brief audio ping on clients
+-- Network string for broadcasting startup lines to clients
 if SERVER then
-	util.AddNetworkString("desiderium_startup_ping")
+	util.AddNetworkString("desiderium_startup_line")
 end
 
 function DESIDERIUM.RegisterAnomaly( name, data )
@@ -36,8 +33,6 @@ function DESIDERIUM.RegisterAnomaly( name, data )
 end
 
 -- Server-side boot cascade: print colored lines directly to server console
--- also print each line into client chat (server-originated) and send a small
--- net ping to clients so they play an audio cue.
 local function BroadcastStartupLines()
 	local lines = {
 		"[DESIDERIUM] Initializing anomaly subsystem...",
@@ -99,12 +94,10 @@ local function BroadcastStartupLines()
 			MsgC( Color(100,220,100), "[DESIDERIUM] ", Color(180,255,180), line .. "\n" )
 			print( line )
 
-			-- send as server-originated chat to clients
-			PrintMessage(HUD_PRINTTALK, "[DESIDERIUM] " .. line)
-
-			-- also send a tiny net ping so clients can play an audio cue
+			-- send line payload to clients so they can render colored chat + play audio
 			if SERVER then
-				net.Start("desiderium_startup_ping")
+				net.Start("desiderium_startup_line")
+				net.WriteString(line)
 				net.Broadcast()
 			end
 		end )
