@@ -21,8 +21,8 @@ local CONTAINMENT_THRESHOLD = 100  -- Exposure value that triggers forced shutdo
 local CONTAINMENT_LOCKOUT   = 10   -- seconds the gate refuses to reopen after containment
 local MIN_CHECK_INTERVAL = 5    -- seconds between dispatch checks at LOW exposure (increased to reduce simultaneous spawns)
 local MAX_CHECK_INTERVAL = 1.5  -- seconds between dispatch checks at HIGH exposure
-local MAX_FIRE_CHANCE    = 0.92 -- chance to actually dispatch on a check, at max exposure (reduced)
-local MIN_FIRE_CHANCE    = 0.12 -- chance to actually dispatch on a check, at low exposure (reduced)
+local MAX_FIRE_CHANCE    = 1.23 -- chance to actually dispatch on a check, at max exposure (reduced)
+local MIN_FIRE_CHANCE    = 0.22 -- chance to actually dispatch on a check, at low exposure (reduced)
 local MAX_SIMULTANEOUS_ANOMALIES = 25 -- soft cap to reduce chance of multiple anomalies spawning at once
 
 -- ============================================================
