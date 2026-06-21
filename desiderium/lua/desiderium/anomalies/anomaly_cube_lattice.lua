@@ -1,5 +1,5 @@
 --[[
-DESIDERIUM Anomaly: Cube Lattice
+DESIDERIUM Anomaly: Cube Lattice – Hunter Variant (with HL2 Dissolve)
 File: desiderium/lua/desiderium/anomalies/anomaly_cube_lattice.lua
 ]]--
 
@@ -7,7 +7,6 @@ if CLIENT then return end
 
 DESIDERIUM = DESIDERIUM or {}
 DESIDERIUM._CubeLatticeLogs = DESIDERIUM._CubeLatticeLogs or {}
--- Keep only the last 100 logs to prevent memory leaks
 if #DESIDERIUM._CubeLatticeLogs > 100 then
     table.remove(DESIDERIUM._CubeLatticeLogs, 1)
 end
@@ -30,17 +29,24 @@ local BASE_SPEED = 1.2
 local SPEED_VARIANCE = 0.7
 
 local HEIGHT_VARIANCE = 48
-local WOBBLE_STRENGTH = 8          -- now used for vertical oscillation
+local WOBBLE_STRENGTH = 8
 
 local EFFECT_COOLDOWN = 0.7
 local GLOBAL_EFFECT_CAP = 40
 
 local ESCALATION_TIME = 240
 local ESCALATION_SPEED_MULT = 1.7
-local ESCALATION_SPLIT_CHANCE = 0.12   -- now implemented
+local ESCALATION_SPLIT_CHANCE = 0.12
 
-local ANOMALY_DURATION = 600           -- auto‑cleanup after 10 minutes
+local ANOMALY_DURATION = 600
 local MAX_LOG_ENTRIES = 100
+
+-- Targeting parameters
+local TARGET_SEARCH_RADIUS = 1200
+local TARGET_REFRESH_INTERVAL_MIN = 2
+local TARGET_REFRESH_INTERVAL_MAX = 4
+local PURSUIT_FORCE_MULT = 14        -- how strongly they chase
+local RETURN_FORCE_MULT = 4          -- how strongly they try to keep orbit (formation)
 
 -- Global effect limiter
 DESIDERIUM._CubeLattice_GlobalEffects = DESIDERIUM._CubeLattice_GlobalEffects or { last = 0, count = 0 }
@@ -64,11 +70,59 @@ local function SafeRemoveConstraints(ent)
     if not IsValid(ent) then return 0 end
     pcall(constraint.RemoveConstraints, ent)
     pcall(constraint.RemoveAll, ent)
-    -- Return number of removed constraints (approximate)
     return math.min(ent:GetPhysicsObjectCount() or 0, 4)
 end
 
--- Cleanup a single cube (remove entity and clear references)
+-- ------------------------------------------------------------------------
+-- DISINTEGRATION using built‑in Half‑Life 2 env_entity_dissolver
+-- ------------------------------------------------------------------------
+local function DisintegrateProp(ent)
+    if not IsValid(ent) then return end
+    -- Only target props (not players, NPCs, or world)
+    local class = ent:GetClass()
+    if not string.find(class, "prop") then return end
+    -- Already being removed?
+    if ent:IsMarkedForDeletion() then return end
+
+    -- Create a dissolver
+    local dissolver = ents.Create("env_entity_dissolver")
+    if not IsValid(dissolver) then
+        -- Fallback: just remove with sparks
+        local effect = EffectData()
+        effect:SetOrigin(ent:GetPos())
+        effect:SetEntity(ent)
+        util.Effect("sparks", effect, true, true)
+        ent:Remove()
+        return
+    end
+
+    dissolver:SetName("cube_dissolver_" .. ent:EntIndex())
+    dissolver:SetKeyValue("dissolvetype", "0")  -- 0 = dissolve, 1 = burn, 2 = electrocute
+    dissolver:Spawn()
+    dissolver:Activate()
+
+    -- Target the entity
+    dissolver:Fire("Dissolve", ent:GetName(), 0)
+    -- Clean up dissolver after a short delay
+    timer.Simple(0.5, function()
+        if IsValid(dissolver) then
+            dissolver:Remove()
+        end
+    end)
+
+    -- Log the event
+    table.insert(DESIDERIUM._CubeLatticeLogs, {
+        time = CurTime(),
+        event = "disintegrate",
+        target = ent,
+        target_class = class
+    })
+    if #DESIDERIUM._CubeLatticeLogs > MAX_LOG_ENTRIES then
+        table.remove(DESIDERIUM._CubeLatticeLogs, 1)
+    end
+end
+
+-- Cleanup functions
 local function CleanupCube(cubeData)
     if not cubeData then return end
     if IsValid(cubeData.ent) then
@@ -78,99 +132,24 @@ local function CleanupCube(cubeData)
     cubeData.phys = nil
 end
 
--- Cleanup the entire anomaly instance
 local function CleanupAnomaly(core)
     if not IsValid(core) then return end
-
     if core._desiderium_timer then
         timer.Remove(core._desiderium_timer)
         core._desiderium_timer = nil
     end
-
     if core._desiderium_cubes then
         for _, c in ipairs(core._desiderium_cubes) do
             CleanupCube(c)
         end
         core._desiderium_cubes = nil
     end
-
     if IsValid(core) then
         core:Remove()
     end
 end
 
--- Apply a random effect to a target (player or prop)
-local function ApplyRandomEffect(cube, target)
-    if not IsValid(target) or not IsValid(cube) then return end
-    if not CanDoGlobalEffect() then return end
-    NoteGlobalEffect(1)
-
-    local phys = target:GetPhysicsObject()
-    if not IsValid(phys) then return end
-
-    local now = CurTime()
-    local effect = math.random(1, 5)
-
-    -- Safety: if destruction is disabled, skip effect 1 (gravity disable)
-    local disableDestruction = GetConVar("desiderium_debug_disable_destruction")
-    if disableDestruction and disableDestruction:GetBool() then
-        effect = math.random(2, 5)
-    end
-
-    -- Player handling
-    if target:IsPlayer() then
-        local push = (target:GetPos() - cube:GetPos()):GetNormalized() * 200 + Vector(0, 0, 200)
-        target:SetVelocity(push)
-
-        -- Log with timestamp and player info
-        table.insert(DESIDERIUM._CubeLatticeLogs, {
-            time = now,
-            event = "player_nudge",
-            target = target,
-            ply = target:SteamID() or target:Nick()
-        })
-        if #DESIDERIUM._CubeLatticeLogs > MAX_LOG_ENTRIES then
-            table.remove(DESIDERIUM._CubeLatticeLogs, 1)
-        end
-        return
-    end
-
-    -- Effects on props / NPCs
-    if effect == 1 then
-        phys:EnableGravity(false)
-        phys:ApplyForceCenter(Vector(0, 0, 300) * math.Clamp(phys:GetMass(), 1, 60))
-        timer.Simple(1.3, function()
-            if IsValid(phys) then
-                phys:EnableGravity(true)
-            end
-        end)
-
-    elseif effect == 2 then
-        local saveVel = phys:GetVelocity()
-        phys:EnableMotion(false)
-        timer.Simple(0.9, function()
-            if IsValid(phys) then
-                phys:EnableMotion(true)
-                phys:SetVelocity(saveVel)
-            end
-        end)
-
-    elseif effect == 3 then
-        local dir = (target:LocalToWorld(target:OBBCenter()) - cube:GetPos()):GetNormalized()
-        local impulse = dir * (200 + math.random() * 400) + VectorRand() * 120
-        phys:ApplyForceCenter(impulse * math.Clamp(phys:GetMass(), 1, 40))
-        phys:ApplyTorqueCenter(VectorRand() * 8000)
-
-    elseif effect == 4 then
-        SafeRemoveConstraints(target)
-
-    elseif effect == 5 then
-        target:SetPos(target:GetPos() + VectorRand() * math.Rand(4, 22))
-        phys:Wake()
-    end
-end
-
--- Create a single cube and set up its collision callback
+-- Create a single cube with targeting logic
 local function MakeCube(core, idx, total, radius)
     local ent = ents.Create("prop_physics")
     if not IsValid(ent) then return nil end
@@ -193,29 +172,39 @@ local function MakeCube(core, idx, total, radius)
         phys = phys,
         ang = ang,
         speed = BASE_SPEED + math.Rand(-SPEED_VARIANCE, SPEED_VARIANCE),
-        radius = radius,
-        baseHeight = math.Rand(-HEIGHT_VARIANCE, HEIGHT_VARIANCE), -- fixed height offset
+        radius = radius + math.Rand(-RADIUS_VARIANCE, RADIUS_VARIANCE),
+        baseHeight = math.Rand(-HEIGHT_VARIANCE, HEIGHT_VARIANCE),
         wobblePhase = math.Rand(0, math.pi * 2),
         lastEffect = 0,
-        core = core
+        core = core,
+        target = nil,               -- current target entity
+        targetRefresh = 0,          -- next time to scan
+        isChasing = false,
     }
 
-    -- Collision callback
+    -- Collision callback – disintegrate props on touch
     ent:AddCallback("PhysicsCollide", function(self, collisionData)
         local now = CurTime()
         local hit = collisionData.HitEntity
         if not IsValid(hit) then return end
 
-        -- Per‑target cooldown
+        -- Ignore players, core, other cubes (we only target props)
+        if hit:IsPlayer() then return end
+        if hit == core then return end
+        if hit:GetClass() == "prop_physics" and hit:GetModel() == CUBE_MODEL then return end
+
+        -- Cooldown per target
         if (hit._desiderium_cube_last or 0) > now - EFFECT_COOLDOWN then return end
         hit._desiderium_cube_last = now
 
-        -- Escalation: chance to split (create a new cube)
+        -- Disintegrate the prop
+        DisintegrateProp(hit)
+
+        -- Escalation: chance to split
         local elapsed = now - core._desiderium_start or 0
         if elapsed > ESCALATION_TIME and math.random() < ESCALATION_SPLIT_CHANCE then
             local count = #core._desiderium_cubes
             if count < MAX_CUBES_HARD then
-                -- Create a new cube near the collision point
                 local newCubeData = MakeCube(core, count + 1, count + 1, BASE_RADIUS + math.Rand(-20, 20))
                 if newCubeData then
                     newCubeData.ent:SetPos(hit:GetPos() + VectorRand() * 30)
@@ -223,13 +212,6 @@ local function MakeCube(core, idx, total, radius)
                 end
             end
         end
-
-        -- Apply the effect with a slight delay
-        timer.Simple(0, function()
-            if IsValid(ent) and IsValid(hit) then
-                ApplyRandomEffect(ent, hit)
-            end
-        end)
     end)
 
     return data
@@ -249,7 +231,7 @@ DESIDERIUM.RegisterAnomaly("cube_lattice", {
     Trigger = function(ctx)
         local origin = (ctx and ctx.origin) or Vector(0, 0, 0)
 
-        -- Create invisible core
+        -- Invisible core
         local core = ents.Create("prop_physics")
         if not IsValid(core) then return false end
 
@@ -268,7 +250,7 @@ DESIDERIUM.RegisterAnomaly("cube_lattice", {
         -- Spawn initial cubes
         local count = math.random(BASE_COUNT_MIN, BASE_COUNT_MAX)
         for i = 1, count do
-            local cube = MakeCube(core, i, count, BASE_RADIUS + math.Rand(-RADIUS_VARIANCE, RADIUS_VARIANCE))
+            local cube = MakeCube(core, i, count, BASE_RADIUS)
             if cube then
                 table.insert(core._desiderium_cubes, cube)
             end
@@ -291,17 +273,68 @@ DESIDERIUM.RegisterAnomaly("cube_lattice", {
                 if not IsValid(c.ent) then
                     table.insert(cubesToRemove, i)
                 else
-                    -- Update angle
+                    -- Refresh target if needed
+                    if c.targetRefresh < CurTime() then
+                        c.target = nil
+                        c.isChasing = false
+                        -- Scan for nearest prop (excluding players, cubes, core)
+                        local bestDist = TARGET_SEARCH_RADIUS
+                        for _, ent in ipairs(ents.FindInSphere(core:GetPos(), TARGET_SEARCH_RADIUS)) do
+                            if IsValid(ent) and not ent:IsPlayer() and ent ~= core then
+                                local class = ent:GetClass()
+                                if string.find(class, "prop") and ent:GetModel() ~= CUBE_MODEL then
+                                    local dist = c.ent:GetPos():DistToSqr(ent:GetPos())
+                                    if dist < bestDist * bestDist then
+                                        bestDist = math.sqrt(dist)
+                                        c.target = ent
+                                    end
+                                end
+                            end
+                        end
+                        if IsValid(c.target) then
+                            c.isChasing = true
+                        end
+                        -- Randomize next refresh
+                        c.targetRefresh = CurTime() + math.Rand(TARGET_REFRESH_INTERVAL_MIN, TARGET_REFRESH_INTERVAL_MAX)
+                    end
+
+                    -- Validate target (still exists and within range)
+                    if c.isChasing and IsValid(c.target) then
+                        local dist = c.ent:GetPos():DistTo(c.target:GetPos())
+                        if dist > TARGET_SEARCH_RADIUS * 1.5 then
+                            c.target = nil
+                            c.isChasing = false
+                        end
+                    else
+                        c.isChasing = false
+                        c.target = nil
+                    end
+
+                    -- Update orbit angle
                     c.ang = c.ang + c.speed * speedMult * 0.08
 
-                    -- Compute target position with wobble (vertical oscillation)
+                    -- Compute desired orbit position (formation)
                     local wobbleOffset = math.sin(elapsed * 0.5 + c.wobblePhase) * WOBBLE_STRENGTH
-                    local targetPos = core:GetPos()
+                    local orbitPos = core:GetPos()
                         + Vector(math.cos(c.ang) * c.radius, math.sin(c.ang) * c.radius, c.baseHeight + wobbleOffset)
 
-                    -- Move the cube
+                    -- Determine final target position
+                    local targetPos = orbitPos
+                    local forceMult = ORBIT_FORCE_MULT
+                    if c.isChasing and IsValid(c.target) then
+                        -- Chase target but also keep some orbit attraction
+                        targetPos = c.target:GetPos() + Vector(0, 0, 10) -- slightly above
+                        forceMult = PURSUIT_FORCE_MULT
+                    end
+
+                    -- Apply physics forces
                     if IsValid(c.phys) then
-                        local force = (targetPos - c.ent:GetPos()) * 6
+                        local force = (targetPos - c.ent:GetPos()) * forceMult
+                        -- If chasing, add a bit of orbit pull so they don't drift too far
+                        if c.isChasing then
+                            local orbitPull = (orbitPos - c.ent:GetPos()) * 2
+                            force = force + orbitPull
+                        end
                         c.phys:ApplyForceCenter(force)
                         c.phys:AddAngleVelocity(VectorRand() * 60)
                     else
@@ -326,7 +359,6 @@ DESIDERIUM.RegisterAnomaly("cube_lattice", {
             end
         end)
 
-        -- Cleanup when core is removed (e.g., by admin or game cleanup)
         core:AddCallback("OnRemove", function()
             CleanupAnomaly(core)
         end)
